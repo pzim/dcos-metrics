@@ -41,6 +41,10 @@ var (
 				Timestamp: "2010-01-02T00:01:02.000000003Z",
 			},
 		},
+		Dimensions: producers.Dimensions{
+			ExecutorID:    "testExecID",
+			FrameworkName: "foo",
+		},
 	}
 )
 
@@ -79,12 +83,12 @@ func mockStatsdServer() (string, chan string, *net.UDPConn) {
 
 func TestDatapointConverter(t *testing.T) {
 	Convey("When converting a datapoint", t, func() {
-		name, val, ok := convertDatapointToStatsd(fooBarMetric.Datapoints[0])
+		name, val, ok := convertDatapointToStatsd(fooBarMetric.Datapoints[0], "testExecID")
 		Convey("It should report success", func() {
 			So(ok, ShouldBeTrue)
 		})
 		Convey("It should contain the metric name", func() {
-			So(name, ShouldEqual, "foo.bar")
+			So(name, ShouldEqual, "foo.testExecID.bar")
 		})
 		Convey("It should pass in the metric value", func() {
 			So(val, ShouldStartWith, "123")
@@ -93,7 +97,7 @@ func TestDatapointConverter(t *testing.T) {
 			So(val, ShouldEndWith, "g")
 		})
 		Convey("It should round to the nearest integer", func() {
-			_, val, _ = convertDatapointToStatsd(fooBarMetric.Datapoints[1])
+			_, val, _ = convertDatapointToStatsd(fooBarMetric.Datapoints[1], "testExecID")
 			So(val, ShouldEqual, "124|g")
 		})
 	})
@@ -115,8 +119,8 @@ func TestStatsdConnector(t *testing.T) {
 			So(err, ShouldBeNil)
 			// The order of metrics receipt is not guaranteed
 			metrics := []string{<-msgs, <-msgs}
-			So(metrics, ShouldContain, "foo.bar:123|g")
-			So(metrics, ShouldContain, "foo.baz:124|g")
+			So(metrics, ShouldContain, "foo.testExecID.bar:123|g")
+			So(metrics, ShouldContain, "foo.testExecID.baz:124|g")
 		}
 		// Pass the appropriate configuration into the plugin
 		app.Run([]string{"", "--statsd-udp-host", "127.0.0.1", "--statsd-udp-port", port})

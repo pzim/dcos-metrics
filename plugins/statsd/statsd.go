@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 
 	log "github.com/Sirupsen/logrus"
@@ -78,7 +79,7 @@ func statsdConnector(metrics []producers.MetricsMessage, c *cli.Context) error {
 	}
 	for _, message := range metrics {
 		log.Debugf("Sending %d datapoints to statsd server...", len(message.Datapoints))
-		emitDatapointsOverStatsd(message.Datapoints, statsdClient)
+		emitDatapointsOverStatsd(message, statsdClient)
 	}
 
 	return nil
@@ -86,29 +87,76 @@ func statsdConnector(metrics []producers.MetricsMessage, c *cli.Context) error {
 
 // emitDatapointsOverStatsd converts datapoints to statsd format and dispatches
 // them in a batch to the statsd server
-func emitDatapointsOverStatsd(datapoints []producers.Datapoint, client *statsd.StatsdClient) error {
+func emitDatapointsOverStatsd(message producers.MetricsMessage, client *statsd.StatsdClient) error {
+	datapoints := message.Datapoints
+	dimensions := message.Dimensions
 	data := make(map[string]string)
 	for _, dp := range datapoints {
-		name, val, ok := convertDatapointToStatsd(dp)
+		name, val, ok := convertDatapointToStatsd(dp, dimensions.ExecutorID)
+		log.Infof("STATSD ============== executorID = %s", dimensions.ExecutorID)
 		// we silently drop metrics which could not be converted
 		if ok {
 			data[name] = val
 		}
 	}
+
+	//log.Infof("executor_id = %s", dimensions.ExecutorID)
 	client.Send(data, 1)
 	return nil
 }
 
 // convertDatapointToStatsd attempts to convert a datapoint to a statsd format
 // name + value, returning a false ok flag if the conversion failed.
-func convertDatapointToStatsd(datapoint producers.Datapoint) (string, string, bool) {
+func convertDatapointToStatsd(datapoint producers.Datapoint, execID string) (string, string, bool) {
 	val, err := normalize(datapoint.Value)
 	if err != nil {
 		// This is only debug-level because we expect many NaNs in regular usage
 		log.Debugf("Metric %s failed to convert: %q", datapoint.Name, err)
 		return "", "", false
 	}
-	return datapoint.Name, fmt.Sprintf("%d|g", val), true
+	name := datapoint.Name
+	var metricName string
+	excludes := []string{"cpus", "dcos", "disk", "mem", "net", "statsd"}
+	prefixExcluded := false
+	for _, v := range excludes {
+		if strings.HasPrefix(name, v) {
+			prefixExcluded = true
+			break
+		}
+	}
+	if !prefixExcluded {
+		// we have a metric that needs to include the executor id
+		metricNameArr := strings.Split(name, ".")
+		log.Infof("STATSD ============== metric array before: %s", metricNameArr)
+		//metricNamePrefix := metricNameArr[0]
+		newMetricNameArr := insertString(metricNameArr, 1, execID)
+		log.Infof("STATSD ============== metric array after: %s", newMetricNameArr)
+		log.Infof("STATSD ============== execID = %s", execID)
+		metricName = strings.Join(newMetricNameArr, ".")
+	} else {
+
+		// need to insert execID into second position [1] of the array
+		// then output string from array to represent the new metric name
+		//log.Infof("first octect of metric name = %s", metricNameArr[0])
+		metricName = datapoint.Name
+	}
+	return metricName, fmt.Sprintf("%d|g", val), true
+}
+
+func insertString(s []string, pos int, val string) []string {
+	// move everything up one from pos
+	arrayCopy := make([]string, len(s))
+	copy(arrayCopy, s)
+	arrSliceFirstHalf := s[0:pos]
+	log.Infof("STATSD ============== first slice value: %s", arrSliceFirstHalf)
+	arrSliceFirstHalf = append(arrSliceFirstHalf, val)
+	log.Infof("STATSD ============== slice value with val: %s", arrSliceFirstHalf)
+	arrSliceSecondHalf := arrayCopy[pos:len(arrayCopy)]
+	log.Infof("STATSD ============== second slice value: %s", arrSliceSecondHalf)
+	arrSliceFirstHalf = append(arrSliceFirstHalf, arrSliceSecondHalf...)
+	log.Infof("STATSD ============== original array value: %s", s)
+	log.Infof("STATSD ============== final slice value with all values: %s", arrSliceFirstHalf)
+	return arrSliceFirstHalf
 }
 
 // normalize converts ints, floats and strings to rounded ints
